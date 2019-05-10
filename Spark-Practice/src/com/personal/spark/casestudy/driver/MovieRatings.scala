@@ -8,6 +8,7 @@ import org.apache.spark.sql.types.{StructType,StructField,IntegerType,StringType
 import org.apache.spark.sql.types.LongType
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.Row
+import org.apache.spark.sql.SaveMode
 
 object MovieRatings {
   def main(args:Array[String]){
@@ -37,7 +38,7 @@ object MovieRatings {
   																	val colsData = row.getAs[String](0).replace("::",":").split(":")
   																	Ratings(colsData(0).toInt,colsData(1).toInt,colsData(2).toInt,colsData(3).toLong)}
   	
-  	val ratingsDf = spark.createDataFrame(ratingsRDD)
+  	val ratingsDf = spark.createDataFrame(ratingsRDD).repartition(10).cache()
   	ratingsDf.show();
   	println(ratingsDf.schema)
   	
@@ -49,7 +50,7 @@ object MovieRatings {
   																	val colsData = row.getAs[String](0).replace("::",":").split(":")
   																	Movies(colsData(0).toInt,colsData(1),colsData(2))}
   	
-  	val moviesDf = spark.createDataFrame(moviesRDD)
+  	val moviesDf = spark.createDataFrame(moviesRDD).repartition(10).cache()
   	moviesDf.show();
   	println(moviesDf.schema)
   	
@@ -58,10 +59,43 @@ object MovieRatings {
   	 */
   	val distinctUidDF = ratingsDf.groupBy(col("userId")).agg(min(col("movieId"))).select(col("userId"))
   	distinctUidDF.show()
+  	distinctUidDF.coalesce(1).write.mode(SaveMode.Overwrite).csv(".\\src\\main\\resources\\distinctUidData")
   	println(distinctUidDF.count())
   	
-    val mostRatedMovieDF = ratingsDf.groupBy(col("movieId")).agg(count(col("userId")).as("cnt")).orderBy(col("cnt").desc)
-  	mostRatedMovieDF.show(1)
+  	/*
+  	 * Most rated movie
+  	 */
+    val mostRatedMoviesDF = ratingsDf.groupBy(col("movieId")).agg(count(col("userId")).as("cnt"),avg(col("rating")).as("average_rating")).orderBy(col("cnt").desc)
+    val topRecMostRatedDF = mostRatedMoviesDF.limit(1)
+    topRecMostRatedDF.coalesce(1).write.mode(SaveMode.Overwrite).csv(".\\src\\main\\resources\\mostRatedMovie")
+  	topRecMostRatedDF.show()
+  	
+  	/*
+  	 * First top 10 Rated Movies with Movie names
+  	 */
+  	val joinedMovieRatingsDF = mostRatedMoviesDF.join(moviesDf, Seq("movieId"), "inner").orderBy(col("cnt").desc).select(col("movieId"),col("movieName"),col("average_rating")).limit(10)
+  	joinedMovieRatingsDF.coalesce(1).write.mode(SaveMode.Overwrite).csv(".\\src\\main\\resources\\top10MostRated")
+  	joinedMovieRatingsDF.show()
+  	
+  	/*
+  	 * Avg rating for each movie
+  	 */
+	 	val averageRatingForMovieDF = joinedMovieRatingsDF.limit(10)
+  	averageRatingForMovieDF.show()
+	 	averageRatingForMovieDF.coalesce(1).write.mode(SaveMode.Overwrite).csv(".\\src\\main\\resources\\averageRatingPerMovie")
+		/*
+  	 * Worst Rated Movie
+  	 */
+		val worstRatedMovieDF = ratingsDf.groupBy(col("movieId")).agg(count(col("userId")).as("cnt")).orderBy(col("cnt")).limit(20)
+  	worstRatedMovieDF.show()
+		worstRatedMovieDF.coalesce(1).write.mode(SaveMode.Overwrite).csv(".\\src\\main\\resources\\worstRated")
+  	
+  	/*
+  	 * Ratings save to Hive
+  	 */
+  		//ratingsDf.write.mode(SaveMode.Overwrite).saveAsTable("movie_ratings_database.ratings")
+  		//val ratingsHiveDF = spark.sql("Select * from movie_ratings_database.ratings")
+  		//ratingsHiveDF.printSchema()
   }
   case class Ratings (userId:Integer, movieId:Integer, rating:Integer, timestamp:Long)
   case class Movies (movieId:Integer, movieName:String, genre:String)
